@@ -58,7 +58,10 @@ import {
   applyVolumeEnvelope,
   triggerSFX,
 } from "../core/audio.js";
+import { withFileLock } from "../core/file_lock.js";
 import {
+  sequenceCameraCuts,
+  CameraCut,
   addCameraShake,
   compileStoryboard,
   createShotCamera,
@@ -66,6 +69,15 @@ import {
   FramingPreset,
   StoryboardShot,
 } from "../core/director.js";
+import {
+  inspectRig,
+  setFacialExpression,
+  FacialExpressionType,
+} from "../core/facial.js";
+import {
+  analyzeAudioEnvelope,
+  applyLipSyncToCharacter,
+} from "../core/audio_analysis.js";
 import {
   checkEntityVisibility,
   groundSnapCheck,
@@ -1281,12 +1293,166 @@ export const toolHandlers = {
     shots: StoryboardShot[];
   }) => {
     const filePath = resolveProjectPath(args.project_path);
+    return withFileLock(filePath, async () => {
+      const project = readProjectFile(filePath);
+      const res = compileStoryboard(project, args.shots);
+      writeProjectFile(filePath, project);
+      return {
+        project_path: filePath,
+        ...res,
+      };
+    });
+  },
+
+  // 37. Batch Execute Operations (Single Atomic Disk Cycle)
+  mineimator_batch_execute: async (args: {
+    project_path: string;
+    operations: Array<{ tool: string; args: Record<string, any> }>;
+    live_reload?: boolean;
+  }) => {
+    const filePath = resolveProjectPath(args.project_path);
+    return withFileLock(filePath, async () => {
+      const results: Array<{ tool: string; result: any }> = [];
+      for (const op of args.operations) {
+        const handler = (toolHandlers as any)[op.tool];
+        if (!handler) {
+          throw new Error(`Unknown tool in batch_execute: '${op.tool}'`);
+        }
+        const opArgs = { project_path: filePath, ...op.args };
+        const res = await handler(opArgs);
+        results.push({ tool: op.tool, result: res });
+      }
+
+      if (args.live_reload) {
+        await liveReloadAutomation(filePath, { mode: "auto" });
+      }
+
+      return {
+        success: true,
+        project_path: filePath,
+        total_operations: args.operations.length,
+        results,
+      };
+    });
+  },
+
+  // 38. Sequence Camera Cuts (Instant VISIBLE true/false transitions across all cameras)
+  mineimator_sequence_camera_cuts: async (args: {
+    project_path: string;
+    cuts: Array<{
+      camera_id?: string;
+      camera_name?: string;
+      start_frame: number;
+      end_frame?: number;
+    }>;
+  }) => {
+    const filePath = resolveProjectPath(args.project_path);
+    return withFileLock(filePath, async () => {
+      const project = readProjectFile(filePath);
+      const mappedCuts: CameraCut[] = args.cuts.map((c) => ({
+        cameraId: c.camera_id || "",
+        cameraName: c.camera_name,
+        startFrame: c.start_frame,
+        endFrame: c.end_frame,
+      }));
+      const res = sequenceCameraCuts(project, mappedCuts);
+      writeProjectFile(filePath, project);
+      return {
+        project_path: filePath,
+        ...res,
+      };
+    });
+  },
+
+  // 39. Inspect Rig & Bone Hierarchy (Supports .mimodel and custom community rigs)
+  mineimator_inspect_rig: async (args: {
+    project_path: string;
+    character_root_id: string;
+  }) => {
+    const filePath = resolveProjectPath(args.project_path);
     const project = readProjectFile(filePath);
-    const res = compileStoryboard(project, args.shots);
-    writeProjectFile(filePath, project);
+    const report = inspectRig(project, args.character_root_id);
     return {
       project_path: filePath,
-      ...res,
+      ...report,
+    };
+  },
+
+  // 40. Set Facial Expression & Auto-Blink / Eye-Tracking
+  mineimator_set_facial_expression: async (args: {
+    project_path: string;
+    character_root_id: string;
+    frame?: number;
+    expression: FacialExpressionType;
+    blink?: boolean;
+    blink_duration_frames?: number;
+    glow_color?: string;
+    transition?: string;
+  }) => {
+    const filePath = resolveProjectPath(args.project_path);
+    return withFileLock(filePath, async () => {
+      const project = readProjectFile(filePath);
+      const res = setFacialExpression(project.timelines, args.character_root_id, {
+        frame: args.frame ?? 0,
+        expression: args.expression,
+        blink: args.blink,
+        blinkDurationFrames: args.blink_duration_frames,
+        glowColor: args.glow_color,
+        transition: args.transition,
+      });
+      writeProjectFile(filePath, project);
+      return {
+        project_path: filePath,
+        ...res,
+      };
+    });
+  },
+
+  // 41. Analyze Audio Envelope (RMS, SFX Peak Detection, and Auto-Lip-Sync)
+  mineimator_analyze_audio_envelope: async (args: {
+    wav_path: string;
+    fps?: number;
+    start_frame?: number;
+    peak_threshold?: number;
+    max_jaw_angle?: number;
+    apply_to_project?: boolean;
+    project_path?: string;
+    character_root_id?: string;
+    jaw_part_name?: string;
+  }) => {
+    const report = analyzeAudioEnvelope({
+      wavPath: args.wav_path,
+      fps: args.fps,
+      startFrame: args.start_frame,
+      peakThreshold: args.peak_threshold,
+      maxJawAngle: args.max_jaw_angle,
+      jawPartName: args.jaw_part_name,
+    });
+
+    if (args.apply_to_project) {
+      if (!args.project_path || !args.character_root_id) {
+        throw new Error(
+          "project_path and character_root_id are required when apply_to_project is true"
+        );
+      }
+      const filePath = resolveProjectPath(args.project_path);
+      await withFileLock(filePath, async () => {
+        const project = readProjectFile(filePath);
+        const res = applyLipSyncToCharacter(project.timelines, args.character_root_id!, {
+          wavPath: args.wav_path,
+          fps: args.fps,
+          startFrame: args.start_frame,
+          maxJawAngle: args.max_jaw_angle,
+          jawPartName: args.jaw_part_name,
+        });
+        writeProjectFile(filePath, project);
+        return res;
+      });
+    }
+
+    return {
+      ...report,
+      applied_to_character: !!args.apply_to_project,
     };
   },
 };

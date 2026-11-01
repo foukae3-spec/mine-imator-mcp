@@ -223,7 +223,7 @@ export function solveLimbIK(options: SolveIKOptions): IKSolution {
       bend: bendDeg,
       shoulderPos: [P0[0], P0[1], P0[2]],
       elbowPos: [P0[0], P0[1], P0[2] - L1],
-      wristPos: [P0[0], P0[1], P0[2] - L1 + L2],
+      wristPos: [P0[0], P0[1], P0[2] - Math.abs(L2 - L1)],
       distance: 0,
       maxReach,
       inReach: false,
@@ -257,9 +257,9 @@ export function solveLimbIK(options: SolveIKOptions): IKSolution {
   // Arms bend backward/downward; legs bend forward/upward.
   let defaultPole: [number, number, number];
   if (limbType.includes("leg")) {
-    defaultPole = limbType.includes("right") ? [-0.1, 1.0, 0.0] : [0.1, 1.0, 0.0];
+    defaultPole = [0, 1.0, 0.0];
   } else {
-    defaultPole = limbType.includes("right") ? [-0.3, -1.0, 0.0] : [0.3, -1.0, 0.0];
+    defaultPole = [0, -1.0, 0.0];
   }
 
   let poleDir: [number, number, number] = defaultPole;
@@ -297,42 +297,40 @@ export function solveLimbIK(options: SolveIKOptions): IKSolution {
     pHatPerp = [vPole[0] / vPoleLen, vPole[1] / vPoleLen, vPole[2] / vPoleLen];
   }
 
+  // Exact 3D unit vector of upper arm bone (from shoulder to elbow):
+  // u = cos(alpha) * d_hat + sin(alpha) * p_hat_perp
+  const u: [number, number, number] = [
+    cosAlpha * Dhat[0] + Math.sin(alpha) * pHatPerp[0],
+    cosAlpha * Dhat[1] + Math.sin(alpha) * pHatPerp[1],
+    cosAlpha * Dhat[2] + Math.sin(alpha) * pHatPerp[2],
+  ];
+
   // Determine direction to target
   // Standard biped arm points straight down at (0, 0, -1) when unrotated
-  // Angle of target vector in pitch (elevation forward/backward):
-  // When target is forward (dy > 0), targetAngle > 0
-  // When target is down (dz < 0), targetAngle is 0 when straight down
-  const dyz = Math.sqrt(dy * dy + dz * dz);
-  const targetPitch = Math.atan2(dy, -dz);
-  // Subtract alpha so upper arm elevates, allowing forearm to bend forward toward target
-  const upperPitch = targetPitch - alpha;
+  // Angle of upper arm vector in pitch (elevation forward/backward):
+  // When target is forward (u[1] > 0), upperPitch > 0
+  // When target is down (u[2] < 0), upperPitch is 0 when straight down
+  const upperPitch = Math.atan2(u[1], -u[2]);
   const rotX = cleanZero(upperPitch * (180 / Math.PI));
 
-  // Yaw / Abduction (ROT_Z) in lateral direction (-dx for Mine-imator convention):
+  // Yaw / Abduction (ROT_Z) in lateral direction (-u[0] for Mine-imator convention):
   // For right arm, positive rotZ moves arm outward to the right (-X).
   // For left arm, negative rotZ moves arm outward to the left (+X).
-  const rotZ = cleanZero(Math.atan2(-dx, Math.max(0.0001, dyz)) * (180 / Math.PI));
+  const uyz = Math.sqrt(u[1] * u[1] + u[2] * u[2]);
+  const rotZ = cleanZero(Math.atan2(-u[0], Math.max(0.0001, uyz)) * (180 / Math.PI));
 
   // Roll (ROT_Y) around bone longitudinal axis
   let rotY = 0;
   if (options.poleVector) {
-    // If explicit pole vector is specified, compute roll twist angle
-    const targetRoll = Math.atan2(poleDir[0], Math.max(0.001, -poleDir[1]));
-    rotY = cleanZero(targetRoll * (180 / Math.PI) * 0.5);
+    const targetRoll = Math.atan2(poleDir[0], -poleDir[1]);
+    rotY = cleanZero(targetRoll * (180 / Math.PI));
   }
 
   // Mathematically exact 3D Forward Kinematics positions
-  const radPitch = upperPitch;
-  const radYaw = -rotZ * (Math.PI / 180);
-
-  const uX = Math.sin(radYaw) * Math.cos(radPitch);
-  const uY = Math.sin(radPitch);
-  const uZ = -Math.cos(radPitch) * Math.cos(radYaw);
-
   const elbowPos: [number, number, number] = [
-    cleanZero(P0[0] + uX * L1),
-    cleanZero(P0[1] + uY * L1),
-    cleanZero(P0[2] + uZ * L1),
+    cleanZero(P0[0] + u[0] * L1),
+    cleanZero(P0[1] + u[1] * L1),
+    cleanZero(P0[2] + u[2] * L1),
   ];
 
   const wristPos: [number, number, number] = [
@@ -500,7 +498,7 @@ export function applyIKToCharacter(
 
   let poleLocal: [number, number, number] | undefined;
   if (options.poleVector) {
-    poleLocal = mat4TransformPoint(M_inv_parent, options.poleVector);
+    poleLocal = mat4TransformVector(M_inv_parent, options.poleVector);
   }
 
   // Solve IK in shoulder local coordinates (shoulder at [0, 0, 0])

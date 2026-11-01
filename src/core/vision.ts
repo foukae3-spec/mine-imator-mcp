@@ -267,6 +267,62 @@ export function computeEntityOBBWorldCorners(
 }
 
 /**
+ * Tests whether a 3D point is inside an entity's Oriented Bounding Box (OBB).
+ */
+export function isPointInsideOBB(
+  point: [number, number, number],
+  obbPos: [number, number, number],
+  obbRot: [number, number, number],
+  bounds: { min: [number, number, number]; max: [number, number, number] }
+): boolean {
+  const dx = point[0] - obbPos[0];
+  const dy = point[1] - obbPos[1];
+  const dz = point[2] - obbPos[2];
+
+  const pitchRad = (obbRot[0] * Math.PI) / 180;
+  const rollRad = (obbRot[1] * Math.PI) / 180;
+  const yawRad = (obbRot[2] * Math.PI) / 180;
+
+  const Fx = Math.sin(yawRad) * Math.cos(pitchRad);
+  const Fy = Math.cos(yawRad) * Math.cos(pitchRad);
+  const Fz = -Math.sin(pitchRad);
+
+  let Rx = Math.cos(yawRad);
+  let Ry = -Math.sin(yawRad);
+  let Rz = 0;
+
+  let Ux = Ry * Fz - Rz * Fy;
+  let Uy = Rz * Fx - Rx * Fz;
+  let Uz = Rx * Fy - Ry * Fx;
+
+  if (Math.abs(rollRad) > 1e-6) {
+    const cosR = Math.cos(rollRad);
+    const sinR = Math.sin(rollRad);
+    const nRx = Rx * cosR + Ux * sinR;
+    const nRy = Ry * cosR + Uy * sinR;
+    const nRz = Rz * cosR + Uz * sinR;
+    const nUx = -Rx * sinR + Ux * cosR;
+    const nUy = -Ry * sinR + Uy * cosR;
+    const nUz = -Rz * sinR + Uz * cosR;
+    Rx = nRx; Ry = nRy; Rz = nRz;
+    Ux = nUx; Uy = nUy; Uz = nUz;
+  }
+
+  const lx = dx * Rx + dy * Ry + dz * Rz;
+  const ly = dx * Fx + dy * Fy + dz * Fz;
+  const lz = dx * Ux + dy * Uy + dz * Uz;
+
+  return (
+    lx >= bounds.min[0] - 1e-4 &&
+    lx <= bounds.max[0] + 1e-4 &&
+    ly >= bounds.min[1] - 1e-4 &&
+    ly <= bounds.max[1] + 1e-4 &&
+    lz >= bounds.min[2] - 1e-4 &&
+    lz <= bounds.max[2] + 1e-4
+  );
+}
+
+/**
  * Evaluates entity 8-corner Oriented Bounding Box (OBB) against camera view frustum
  * with near-plane clipping (P_c,y >= 1.0).
  */
@@ -278,8 +334,20 @@ export function projectOBBToScreenSpace(
   aspectRatio: number = 16 / 9,
   viewportWidth: number = 1280,
   viewportHeight: number = 720,
-  nearClip: number = 1.0
+  nearClip: number = 1.0,
+  cameraInside: boolean = false
 ): OBBProjectionResult {
+  if (cameraInside) {
+    return {
+      inFrame: true,
+      behindCamera: false,
+      ndcMin: [-1, -1],
+      ndcMax: [1, 1],
+      pixelBounds: { x: 0, y: 0, width: viewportWidth, height: viewportHeight },
+      visibleCornersCount: 8,
+    };
+  }
+
   const cameraCorners = obbWorldCorners.map((cw) =>
     transformWorldToCamera(cameraPos, cameraRot, cw)
   );
@@ -457,6 +525,7 @@ export function checkEntityVisibility(
 
   // 8-Corner OBB Frustum Projection with near-plane clipping
   const bounds = getEntityLocalBoundingBox(entityTimeline.type);
+  const cameraInside = isPointInsideOBB(camPos, entPosRaw, entRot, bounds);
   const obbCorners = computeEntityOBBWorldCorners(entPosRaw, entRot, bounds);
   const obbResult = projectOBBToScreenSpace(
     camPos,
@@ -466,7 +535,8 @@ export function checkEntityVisibility(
     16 / 9,
     viewportWidth,
     viewportHeight,
-    1.0
+    1.0,
+    cameraInside
   );
 
   // Separate Head/Face Keypoint Projection for rule-of-thirds composition
@@ -701,6 +771,8 @@ export async function renderAndInspectFrame(
     cameraName?: string;
     windowTitle?: string;
     outputImagePath?: string;
+    showRuleOfThirds?: boolean;
+    show_rule_of_thirds?: boolean;
   } = {}
 ): Promise<{
   success: boolean;
@@ -741,7 +813,8 @@ export async function renderAndInspectFrame(
   // Attempt window capture
   let captured = false;
   try {
-    const capRes = await captureMineimatorViewport(outPath, options.windowTitle);
+    const showOverlay = options.showRuleOfThirds ?? options.show_rule_of_thirds ?? false;
+    const capRes = captureMineimatorViewport(outPath, options.windowTitle, showOverlay);
     captured = capRes.success;
   } catch {
     captured = false;

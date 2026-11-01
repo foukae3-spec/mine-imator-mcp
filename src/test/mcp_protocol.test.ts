@@ -87,7 +87,7 @@ describe("MCP JSON-RPC Protocol Transport", () => {
 
     assert.equal(typeof listResp, "object");
     assert.equal(Array.isArray(listResp?.result?.tools), true);
-    assert.equal(listResp?.result?.tools.length, 36);
+    assert.equal(listResp?.result?.tools.length, 41);
 
     assert.equal(typeof callResp, "object");
     assert.equal(Array.isArray(callResp?.result?.content), true);

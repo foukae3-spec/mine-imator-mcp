@@ -1466,6 +1466,187 @@ const TOOLS = [
       required: ["project_path", "shots"],
     },
   },
+  {
+    name: "mineimator_batch_execute",
+    description:
+      "Execute multiple scene, keyframe, or rigging mutations in a single atomic disk write cycle with concurrency locking.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_path: {
+          type: "string",
+          description: "Path to .miproject file.",
+        },
+        operations: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              tool: { type: "string", description: "Tool name to execute." },
+              args: { type: "object", description: "Arguments for the tool." },
+            },
+            required: ["tool", "args"],
+          },
+          description: "Array of operations to execute atomically.",
+        },
+        live_reload: {
+          type: "boolean",
+          description: "Whether to hot-reload Mine-imator once after all operations complete.",
+        },
+      },
+      required: ["project_path", "operations"],
+    },
+  },
+  {
+    name: "mineimator_sequence_camera_cuts",
+    description:
+      "Explicitly insert VISIBLE: true for active camera and VISIBLE: false for all inactive cameras with instant transitions at each cut frame.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_path: {
+          type: "string",
+          description: "Path to .miproject file.",
+        },
+        cuts: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              camera_id: { type: "string" },
+              camera_name: { type: "string" },
+              start_frame: { type: "number" },
+              end_frame: { type: "number" },
+            },
+            required: ["start_frame"],
+          },
+          description: "List of camera cuts across the timeline.",
+        },
+      },
+      required: ["project_path", "cuts"],
+    },
+  },
+  {
+    name: "mineimator_inspect_rig",
+    description:
+      "Inspect bone hierarchy of characters, detecting standard biped parts, facial rig bones (brows, eyes, jaw, mouth), and custom community .mimodel bones.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_path: {
+          type: "string",
+          description: "Path to .miproject file.",
+        },
+        character_root_id: {
+          type: "string",
+          description: "Root timeline ID of character.",
+        },
+      },
+      required: ["project_path", "character_root_id"],
+    },
+  },
+  {
+    name: "mineimator_set_facial_expression",
+    description:
+      "Apply facial expressions (happy, angry, shocked, sad, smug, glowing_eyes, god_mode, winks) and auto-blinks to characters with facial rigs or vanilla bipeds.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_path: {
+          type: "string",
+          description: "Path to .miproject file.",
+        },
+        character_root_id: {
+          type: "string",
+          description: "Root timeline ID of character.",
+        },
+        frame: {
+          type: "number",
+          description: "Frame number to set expression (default: 0).",
+        },
+        expression: {
+          type: "string",
+          enum: [
+            "neutral",
+            "happy",
+            "angry",
+            "sad",
+            "shocked",
+            "smug",
+            "glowing_eyes",
+            "god_mode",
+            "wink_left",
+            "wink_right",
+          ],
+          description: "Facial expression preset.",
+        },
+        blink: {
+          type: "boolean",
+          description: "Whether to animate an eye blink at this frame.",
+        },
+        blink_duration_frames: {
+          type: "number",
+          description: "Duration of eye blink in frames (default: 2).",
+        },
+        glow_color: {
+          type: "string",
+          description: "Hex color for glowing_eyes / god_mode (e.g. '#FF2200').",
+        },
+        transition: {
+          type: "string",
+          description: "Keyframe transition easing (default: 'instant').",
+        },
+      },
+      required: ["project_path", "character_root_id", "expression"],
+    },
+  },
+  {
+    name: "mineimator_analyze_audio_envelope",
+    description:
+      "Analyze audio WAV file RMS envelope per frame, detect SFX/beat impact frames for camera shake sync, and auto-generate jaw speech lip-sync keyframes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        wav_path: {
+          type: "string",
+          description: "Path to PCM 16-bit WAV audio file.",
+        },
+        fps: {
+          type: "number",
+          description: "Project frame rate (default: 24).",
+        },
+        start_frame: {
+          type: "number",
+          description: "Start frame in timeline (default: 0).",
+        },
+        peak_threshold: {
+          type: "number",
+          description: "Normalized RMS threshold [0, 1] for impact detection (default: 0.6).",
+        },
+        max_jaw_angle: {
+          type: "number",
+          description: "Maximum jaw drop angle in degrees (default: 22).",
+        },
+        apply_to_project: {
+          type: "boolean",
+          description: "Whether to apply jaw keyframes directly to a character in project.",
+        },
+        project_path: {
+          type: "string",
+          description: "Path to .miproject file if applying to project.",
+        },
+        character_root_id: {
+          type: "string",
+          description: "Character root timeline ID if applying to project.",
+        },
+        jaw_part_name: {
+          type: "string",
+          description: "Name of jaw part to animate (default: 'jaw').",
+        },
+      },
+      required: ["wav_path"],
+    },
+  },
 ];
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {

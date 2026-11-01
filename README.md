@@ -1,7 +1,7 @@
 # Mine-imator Model Context Protocol (MCP) Server v2.0
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-1.6.1-green.svg)](https://modelcontextprotocol.io/)
-[![Tests](https://img.shields.io/badge/Tests-107%2F107%20Passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-119%2F119%20Passing-brightgreen.svg)]()
 [![Target](https://img.shields.io/badge/Mine--imator-2.0.2%20%7C%20Vexel%201.3.2-orange.svg)](https://vexelmineimator.com/)
 
 An enterprise-grade **Model Context Protocol (MCP)** server enabling AI agents and LLMs to orchestrate, rig, animate, direct, and synthesize broadcast-quality 3D Minecraft cinematics inside **Mine-imator 2.0.2** and **Mine-imator Vexel Build v1.3.2**.
@@ -22,12 +22,14 @@ flowchart TD
     end
 
     subgraph MCP["mine-imator-mcp Server (TypeScript / Node.js)"]
-        Tools["36 Registered Studio Tools"]
+        Tools["41 Registered Studio Tools"]
         ProjectEngine["Format 34/46 Project Synthesizer"]
         Vision["3D Spatial & Frustum Vision Engine"]
-        Audio["PCM Audio & Waveform Generator"]
+        Audio["PCM Audio, Envelope & RMS Generator"]
         Particles["Native Particle Emitter Engine"]
         Structures["Parametric Voxel Prefab Builder"]
+        Facial["Custom Rig & Facial Expression Engine"]
+        FileLock["Async Mutex & Atomic File Lock"]
     end
 
     subgraph Desktop["Mine-imator Desktop Runtime"]

@@ -359,9 +359,89 @@ export interface StoryboardShot {
   description?: string;
 }
 
+export interface CameraCut {
+  cameraId: string;
+  startFrame: number;
+  endFrame?: number;
+  cameraName?: string;
+}
+
+/**
+ * Sequences camera visibility keyframes across all cameras in the project.
+ * Explicitly inserts VISIBLE: true for the active camera and VISIBLE: false for all
+ * other cameras at each shot cut frame with transition: "instant".
+ */
+export function sequenceCameraCuts(
+  project: MiProject,
+  cuts: CameraCut[]
+): {
+  success: boolean;
+  totalCuts: number;
+  keyframesInserted: number;
+  activeCameras: string[];
+} {
+  const allCameras = project.timelines.filter((t) => t.type === "camera");
+  if (allCameras.length === 0) {
+    return { success: true, totalCuts: 0, keyframesInserted: 0, activeCameras: [] };
+  }
+
+  const sortedCuts = [...cuts].sort((a, b) => a.startFrame - b.startFrame);
+  let keyframesInserted = 0;
+  const activeCameraIds = new Set<string>();
+
+  for (let idx = 0; idx < sortedCuts.length; idx++) {
+    const cut = sortedCuts[idx];
+    const targetCam = allCameras.find(
+      (c) => c.id === cut.cameraId || (cut.cameraName && c.name === cut.cameraName)
+    );
+    if (!targetCam) continue;
+
+    activeCameraIds.add(targetCam.id);
+    const cutFrame = cut.startFrame;
+
+    // Active camera turns ON at cutFrame with instant transition
+    insertKeyframe(targetCam, cutFrame, {
+      VISIBLE: true,
+      transition: "instant",
+    });
+    keyframesInserted++;
+
+    // All other cameras turn OFF at cutFrame with instant transition
+    for (const otherCam of allCameras) {
+      if (otherCam.id !== targetCam.id) {
+        insertKeyframe(otherCam, cutFrame, {
+          VISIBLE: false,
+          transition: "instant",
+        });
+        keyframesInserted++;
+      }
+    }
+
+    // If cut has an explicit endFrame and is the last cut or next cut starts later:
+    if (cut.endFrame !== undefined) {
+      const nextCut = sortedCuts[idx + 1];
+      if (!nextCut || nextCut.startFrame > cut.endFrame) {
+        insertKeyframe(targetCam, cut.endFrame, {
+          VISIBLE: false,
+          transition: "instant",
+        });
+        keyframesInserted++;
+      }
+    }
+  }
+
+  return {
+    success: true,
+    totalCuts: sortedCuts.length,
+    keyframesInserted,
+    activeCameras: Array.from(activeCameraIds),
+  };
+}
+
 /**
  * Compiles a multi-scene storyboard manifest into the project.
- * Validates shot boundaries, start/end frames, camera presence, and persists storyboard metadata.
+ * Validates shot boundaries, start/end frames, camera presence, persists storyboard metadata,
+ * and automatically sequences VISIBLE: true/false instant cut keyframes across cameras.
  */
 export function compileStoryboard(
   project: MiProject,
@@ -371,6 +451,7 @@ export function compileStoryboard(
   totalShots: number;
   shots: StoryboardShot[];
   timelineLength: number;
+  cutsSequenced?: number;
 } {
   if (!Array.isArray(shots)) {
     throw new Error("shots parameter must be an array");
@@ -421,10 +502,21 @@ export function compileStoryboard(
     project.project.timeline.region_end = String(maxFrame);
   }
 
+  // Automatically sequence camera VISIBLE cuts across shot boundaries
+  const cutsResult = sequenceCameraCuts(
+    project,
+    sortedShots.map((s) => ({
+      cameraId: s.cameraId,
+      startFrame: s.startFrame,
+      endFrame: s.endFrame,
+    }))
+  );
+
   return {
     success: true,
     totalShots: sortedShots.length,
     shots: sortedShots,
     timelineLength: maxFrame,
+    cutsSequenced: cutsResult.keyframesInserted,
   };
 }

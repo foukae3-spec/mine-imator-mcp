@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { MiProject } from "../types/miproject.js";
+import { withFileLock } from "./file_lock.js";
 import {
   createDefaultBackgroundSettings,
   createDefaultProjectSettings,
@@ -71,8 +72,59 @@ export function writeProjectFile(targetPath: string, project: MiProject): string
     fs.mkdirSync(dir, { recursive: true });
   }
   const json = JSON.stringify(project, null, "\t");
-  fs.writeFileSync(filePath, json, "utf-8");
+  
+  // Atomic write via temporary file + rename to prevent corruption
+  const tmpFile = `${filePath}.tmp.${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  fs.writeFileSync(tmpFile, json, "utf-8");
+  
+  // Windows-safe rename with retry loop for transient locks
+  let renamed = false;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      fs.renameSync(tmpFile, filePath);
+      renamed = true;
+      break;
+    } catch (err: unknown) {
+      lastErr = err;
+      // Small busy-wait backoff for Windows file-system handles
+      const start = Date.now();
+      while (Date.now() - start < 15) {
+        // spin
+      }
+    }
+  }
+
+  if (!renamed) {
+    // Fallback: direct overwrite if rename failed
+    try {
+      fs.writeFileSync(filePath, json, "utf-8");
+      if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+    } catch {
+      throw lastErr;
+    }
+  }
+
   return filePath;
+}
+
+/**
+ * Async thread-safe project file reading guarded by file lock.
+ */
+export async function readProjectFileAsync(targetPath: string): Promise<MiProject> {
+  const filePath = resolveProjectPath(targetPath);
+  return withFileLock(filePath, () => readProjectFile(filePath));
+}
+
+/**
+ * Async thread-safe project file writing guarded by file lock and atomic rename.
+ */
+export async function writeProjectFileAsync(
+  targetPath: string,
+  project: MiProject
+): Promise<string> {
+  const filePath = resolveProjectPath(targetPath);
+  return withFileLock(filePath, () => writeProjectFile(filePath, project));
 }
 
 export function createNewProject(options: CreateProjectOptions): {

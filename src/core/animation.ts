@@ -21,6 +21,9 @@ export function insertKeyframe(
     normalizedValues.BEND_ANGLE_X = Number(normalizedValues.BEND);
     delete (normalizedValues as { BEND?: unknown }).BEND;
   }
+  if (normalizedValues.transition !== undefined && normalizedValues.TRANSITION === undefined) {
+    normalizedValues.TRANSITION = normalizedValues.transition as any;
+  }
   timeline.keyframes[frameStr] = {
     ...(timeline.keyframes[frameStr] || {}),
     ...normalizedValues,
