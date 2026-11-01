@@ -176,39 +176,15 @@ public class CrossDesktopCapture {
 
             if (IsIconic(foundHwnd)) {
                 ShowWindow(foundHwnd, 9); // SW_RESTORE
-                Thread.Sleep(250);
+                Thread.Sleep(300);
             }
-
-            // Unlock foreground activation in Windows interactive session
-            keybd_event(0x12, 0, 0, 0); // Alt down
-            keybd_event(0x12, 0, 2, 0); // Alt up
-
-            IntPtr fg = GetForegroundWindow();
-            uint unusedPid;
-            uint fgThread = GetWindowThreadProcessId(fg, out unusedPid);
-            uint curThread = GetCurrentThreadId();
-            if (fgThread != curThread && fgThread != 0) {
-                AttachThreadInput(curThread, fgThread, true);
-            }
-
-            SetWindowPos(foundHwnd, (IntPtr)(-1) /*HWND_TOPMOST*/, 0, 0, 0, 0, 0x0001 | 0x0002);
-            SetWindowPos(foundHwnd, (IntPtr)(-2) /*HWND_NOTOPMOST*/, 0, 0, 0, 0, 0x0001 | 0x0002);
-            BringWindowToTop(foundHwnd);
-            SetForegroundWindow(foundHwnd);
-            SwitchToThisWindow(foundHwnd, true);
-            ShowWindow(foundHwnd, 5); // SW_SHOW
-
-            if (fgThread != curThread && fgThread != 0) {
-                AttachThreadInput(curThread, fgThread, false);
-            }
-            Thread.Sleep(400);
 
             RECT r;
             GetWindowRect(foundHwnd, out r);
             int w = r.Right - r.Left;
             int h = r.Bottom - r.Top;
             if (w <= 0 || h <= 0) {
-                res = "ERROR: Invalid window bounds";
+                res = "ERROR: Invalid window bounds (" + w + "x" + h + ")";
                 CloseDesktop(hDesk);
                 return;
             }
@@ -280,14 +256,17 @@ public class CrossDesktopCapture {
 '@
 
 Add-Type -TypeDefinition $sig -ReferencedAssemblies System.Drawing
-[CrossDesktopCapture]::ExecuteCapture($targetTitle, $outPath, $showOverlay)
+$captureRes = [CrossDesktopCapture]::ExecuteCapture($targetTitle, $outPath, $showOverlay)
+Write-Output "RESULT: $captureRes"
 `;
 
   try {
     const output = runPowerShell(psScript, 12000);
+    const match = output.match(/RESULT:\s*(.*)/);
+    const captureOutput = match ? match[1].trim() : output;
 
-    if (output.startsWith("OK:")) {
-      const parts = output.split(":");
+    if (captureOutput.startsWith("OK:")) {
+      const parts = captureOutput.split(":");
       const w = parseInt(parts[1], 10);
       const h = parseInt(parts[2], 10);
       const winTitle = parts.slice(3).join(":");
