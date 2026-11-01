@@ -456,13 +456,13 @@ export const toolHandlers = {
     let defaultRot: [number, number, number] = [0, 0, 0];
 
     if (isRightArm) {
-      // Natural sword/tool grip extending forward from Steve's right hand fist
-      defaultPos = [1.0, -8.5, 0.5];
-      defaultRot = [-85, 15, -35];
+      // Natural sword/tool grip extending forward from Steve's right hand fist at bottom of arm (-Z)
+      defaultPos = [0, 1.0, -10.0];
+      defaultRot = [-85, 0, -35];
     } else if (isLeftArm) {
       // Mirrored grip for left hand
-      defaultPos = [-1.0, -8.5, 0.5];
-      defaultRot = [-85, -15, 35];
+      defaultPos = [0, 1.0, -10.0];
+      defaultRot = [-85, 0, 35];
     }
 
     const pos = args.position || defaultPos;

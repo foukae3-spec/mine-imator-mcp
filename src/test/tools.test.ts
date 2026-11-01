@@ -122,11 +122,11 @@ describe("MCP Tool Handlers (21 Tools End-to-End)", () => {
     const swordTl = proj.timelines.find((t) => t.id === itemId);
     assert.deepEqual(
       [swordTl?.default_values.POS_X, swordTl?.default_values.POS_Y, swordTl?.default_values.POS_Z],
-      [1.0, -8.5, 0.5]
+      [0, 1.0, -10.0]
     );
     assert.deepEqual(
       [swordTl?.default_values.ROT_X, swordTl?.default_values.ROT_Y, swordTl?.default_values.ROT_Z],
-      [-85, 15, -35]
+      [-85, 0, -35]
     );
     assert.equal(swordTl?.inherit.bend, true);
     assert.equal(swordTl?.inherit.rot_point, false);
