@@ -194,8 +194,8 @@ export interface ProjectSettings {
   tempo: number;
   grid_rows?: number;
   grid_columns?: number;
-  view_main_camera?: number;
-  view_second_camera?: number;
+  view_main_camera?: string | number;
+  view_second_camera?: string | number;
   timeline?: {
     repeat: boolean;
     seamless_repeat: boolean;

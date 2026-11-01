@@ -25,8 +25,8 @@ export function createDefaultProjectSettings(
     tempo,
     grid_rows: 3,
     grid_columns: 3,
-    view_main_camera: -4,
-    view_second_camera: -5,
+    view_main_camera: "null",
+    view_second_camera: "null",
     timeline: {
       repeat: false,
       seamless_repeat: false,

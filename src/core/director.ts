@@ -500,6 +500,8 @@ export function compileStoryboard(
   if (sortedShots.length > 0) {
     project.project.timeline.region_start = String(sortedShots[0].startFrame);
     project.project.timeline.region_end = String(maxFrame);
+    project.project.view_main_camera = sortedShots[0].cameraId;
+    project.project.view_second_camera = "null";
   }
 
   // Automatically sequence camera VISIBLE cuts across shot boundaries
