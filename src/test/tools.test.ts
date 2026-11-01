@@ -302,6 +302,14 @@ describe("MCP Tool Handlers (21 Tools End-to-End)", () => {
     // If Mine-imator is not running in background, it should return graceful status with message
     assert.equal(typeof res.success, "boolean");
     assert.equal(typeof res.message, "string");
+
+    // Also verify call with show_rule_of_thirds overlay enabled
+    const resOverlay = await toolHandlers.mineimator_capture_viewport({
+      output_image_path: path.join(tempDir, "viewport_grid.png"),
+      show_rule_of_thirds: true,
+    });
+    assert.equal(typeof resOverlay.success, "boolean");
+    assert.equal(typeof resOverlay.message, "string");
   });
 
   it("21. mineimator_live_reload (reloads active project or stages safely)", async () => {

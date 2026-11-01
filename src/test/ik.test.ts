@@ -179,4 +179,90 @@ describe("Analytical Inverse Kinematics (IK) Engine", () => {
 
     if (fs.existsSync(testPath)) fs.unlinkSync(testPath);
   });
+
+  it("should solve IK with hierarchical parent FK chain when torso bends forward", () => {
+    const testPath = "C:/Users/RocKeR/.gemini/antigravity/scratch/mine-imator-mcp/test_ik_torso_bend.miproject";
+    const { project } = createNewProject({ project_path: testPath });
+    const char = buildCharacterHierarchy({
+      name: "Bending Steve",
+      position: [0, 0, 0],
+    });
+    project.templates.push(char.template);
+    project.timelines.push(char.rootTimeline, ...char.parts);
+
+    // Apply torso bend (BEND_ANGLE_X = 30) on body timeline
+    const bodyTl = char.parts.find((p) => p.model_part_name === "body")!;
+    bodyTl.default_values = {
+      ...bodyTl.default_values,
+      BEND_ANGLE_X: 30,
+    };
+
+    // Target is in front of character at [0, 12, 18]
+    const res = applyIKToCharacter(
+      project.timelines,
+      char.rootTimeline.id,
+      "right_arm",
+      [0, 12, 18],
+      { frame: 0 }
+    );
+
+    assert.equal(res.success, true);
+    // The shoulder should have rotated forward and down around waist pivot (Z = 18)
+    assert.ok(res.solution.shoulderPos[1] > 0, `Expected bent shoulder Y > 0, got ${res.solution.shoulderPos[1]}`);
+    assert.ok(res.solution.shoulderPos[2] < 22, `Expected bent shoulder Z < 22, got ${res.solution.shoulderPos[2]}`);
+    assert.ok(!isNaN(res.solution.rot[0]), "rotX must not be NaN");
+    assert.ok(!isNaN(res.solution.bend), "bend must not be NaN");
+
+    if (fs.existsSync(testPath)) fs.unlinkSync(testPath);
+  });
+
+  it("should avoid NaN singularity when direction vector D is collinear with pole vector (Gram-Schmidt fallback)", () => {
+    // Target is directly in line with pole vector (both along +Y)
+    const solCollinear = solveLimbIK({
+      shoulderPos: [0, 0, 0],
+      targetPos: [0, 10, 0],
+      poleVector: [0, 10, 0], // exactly collinear!
+      limbType: "right_arm",
+    });
+
+    assert.ok(!isNaN(solCollinear.rot[0]), `rotX should not be NaN, got ${solCollinear.rot[0]}`);
+    assert.ok(!isNaN(solCollinear.rot[1]), `rotY should not be NaN, got ${solCollinear.rot[1]}`);
+    assert.ok(!isNaN(solCollinear.rot[2]), `rotZ should not be NaN, got ${solCollinear.rot[2]}`);
+    assert.ok(!isNaN(solCollinear.bend), `bend should not be NaN, got ${solCollinear.bend}`);
+    assert.ok(!isNaN(solCollinear.elbowPos[0]), "elbowPos[0] should not be NaN");
+    assert.ok(!isNaN(solCollinear.elbowPos[1]), "elbowPos[1] should not be NaN");
+    assert.ok(!isNaN(solCollinear.elbowPos[2]), "elbowPos[2] should not be NaN");
+
+    // Antiparallel collinear (opposite direction)
+    const solAntiCollinear = solveLimbIK({
+      shoulderPos: [0, 0, 0],
+      targetPos: [0, 10, 0],
+      poleVector: [0, -10, 0],
+      limbType: "right_arm",
+    });
+
+    assert.ok(!isNaN(solAntiCollinear.rot[0]));
+    assert.ok(!isNaN(solAntiCollinear.bend));
+  });
+
+  it("should clamp joint bend angles strictly to natural limits [0, 140 deg] even if extreme limits passed", () => {
+    // Attempt to pass negative minLimit and oversized maxLimit
+    const sol1 = solveLimbIK({
+      shoulderPos: [0, 0, 0],
+      targetPos: [0, 0, 0], // zero distance -> extreme bend
+      jointLimitMin: -50,
+      jointLimitMax: 200,
+    });
+    assert.ok(sol1.bend <= 140, `Bend must be <= 140, got ${sol1.bend}`);
+    assert.ok(sol1.bend >= 0, `Bend must be >= 0, got ${sol1.bend}`);
+
+    // Straight reach: bend should be clamped at minimum 0
+    const sol2 = solveLimbIK({
+      shoulderPos: [0, 0, 0],
+      targetPos: [0, 0, -10],
+      jointLimitMin: -30,
+    });
+    assert.ok(sol2.bend >= 0, `Bend must be >= 0, got ${sol2.bend}`);
+    assert.ok(sol2.bend <= 140, `Bend must be <= 140, got ${sol2.bend}`);
+  });
 });

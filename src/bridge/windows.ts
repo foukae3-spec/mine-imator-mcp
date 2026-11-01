@@ -65,7 +65,8 @@ function toBase64String(str: string): string {
 
 export function captureMineimatorViewport(
   outputPath?: string,
-  windowTitle: string = "Mine-imator"
+  windowTitle: string = "Mine-imator",
+  showRuleOfThirds: boolean = false
 ): CaptureViewportResult {
   const targetOut = outputPath || path.join(process.cwd(), "live_preview.png");
   const resolvedOut = path.resolve(targetOut);
@@ -77,11 +78,12 @@ export function captureMineimatorViewport(
   const b64Title = toBase64String(windowTitle);
   const b64OutPath = toBase64String(resolvedOut);
 
-  // Cross-desktop Win32 GDI capture script: enumerates Desktop "Default" so it finds Mine-imator regardless of sandbox
+  // Cross-desktop Win32 PrintWindow / GDI capture script: composites Direct3D 11 swapchains via DWM
   const psScript = `
 $ProgressPreference = 'SilentlyContinue'
 $targetTitle = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64Title}'))
 $outPath = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64OutPath}'))
+$showOverlay = [bool]::Parse('${showRuleOfThirds ? "True" : "False"}')
 
 $sig = @'
 using System;
@@ -114,6 +116,7 @@ public class CrossDesktopCapture {
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll", SetLastError = true)] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT {
@@ -123,7 +126,7 @@ public class CrossDesktopCapture {
         public int Bottom;
     }
 
-    public static string ExecuteCapture(string queryTitle, string outFilePath) {
+    public static string ExecuteCapture(string queryTitle, string outFilePath, bool showOverlay) {
         string res = "ERROR: Window not found";
         Thread t = new Thread(() => {
             IntPtr hWinsta = OpenWindowStation("winsta0", false, 0x037F);
@@ -212,7 +215,54 @@ public class CrossDesktopCapture {
 
             using (Bitmap bmp = new Bitmap(w, h)) {
                 using (Graphics g = Graphics.FromImage(bmp)) {
-                    g.CopyFromScreen(r.Left, r.Top, 0, 0, new Size(w, h));
+                    IntPtr hdc = g.GetHdc();
+                    bool pwSuccess = false;
+                    try {
+                        // PrintWindow with PW_RENDERFULLCONTENT (0x02) composites Direct3D 11 hardware flip-model swapchains via DWM
+                        pwSuccess = PrintWindow(foundHwnd, hdc, 0x00000002);
+                        if (!pwSuccess) {
+                            pwSuccess = PrintWindow(foundHwnd, hdc, 0x00000000);
+                        }
+                    } catch {
+                        pwSuccess = false;
+                    } finally {
+                        if (hdc != IntPtr.Zero) {
+                            g.ReleaseHdc(hdc);
+                        }
+                    }
+
+                    if (!pwSuccess) {
+                        try {
+                            g.CopyFromScreen(r.Left, r.Top, 0, 0, new Size(w, h));
+                        } catch {}
+                    }
+
+                    // Optional Rule-of-Thirds HUD grid overlay + power point markers
+                    if (showOverlay) {
+                        float x1 = w / 3.0f;
+                        float x2 = 2.0f * w / 3.0f;
+                        float y1 = h / 3.0f;
+                        float y2 = 2.0f * h / 3.0f;
+
+                        using (Pen gridPen = new Pen(Color.FromArgb(160, 255, 255, 255), 1.5f)) {
+                            gridPen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
+                            g.DrawLine(gridPen, x1, 0, x1, h);
+                            g.DrawLine(gridPen, x2, 0, x2, h);
+                            g.DrawLine(gridPen, 0, y1, w, y1);
+                            g.DrawLine(gridPen, 0, y2, w, y2);
+                        }
+
+                        using (Pen markPen = new Pen(Color.FromArgb(220, 255, 215, 0), 2.0f)) {
+                            float sz = 8.0f;
+                            float[][] pts = new float[][] {
+                                new float[] { x1, y1 }, new float[] { x1, y2 },
+                                new float[] { x2, y1 }, new float[] { x2, y2 }
+                            };
+                            foreach (var pt in pts) {
+                                g.DrawEllipse(markPen, pt[0] - sz / 2, pt[1] - sz / 2, sz, sz);
+                            }
+                        }
+                    }
                 }
                 bmp.Save(outFilePath, ImageFormat.Png);
             }
@@ -230,7 +280,7 @@ public class CrossDesktopCapture {
 '@
 
 Add-Type -TypeDefinition $sig -ReferencedAssemblies System.Drawing
-[CrossDesktopCapture]::ExecuteCapture($targetTitle, $outPath)
+[CrossDesktopCapture]::ExecuteCapture($targetTitle, $outPath, $showOverlay)
 `;
 
   try {
@@ -287,7 +337,7 @@ export function openViaDrop(
   const formattedProjectFile = resolvedProject.replace(/\//g, "\\");
   const b64Proj = toBase64String(formattedProjectFile);
 
-  // PowerShell check and activate window across desktop stations with WM_DROPFILES
+  // PowerShell check, activate window across desktop stations, and send WM_DROPFILES with deadlock prevention
   const psScript = `
 $ProgressPreference = 'SilentlyContinue'
 $targetTitle = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64Title}'))
@@ -322,9 +372,29 @@ public class CrossDesktopFocus {
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll", SetLastError = true)] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd,
+        uint Msg,
+        IntPtr wParam,
+        IntPtr lParam,
+        uint fuFlags,
+        uint uTimeout,
+        out IntPtr lpdwResult
+    );
+    [DllImport("user32.dll")] public static extern bool EnumThreadWindows(uint dwThreadId, CallBackPtr lpfn, IntPtr lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Auto)] public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
     [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
     [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalLock(IntPtr hMem);
     [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GlobalUnlock(IntPtr hMem);
+    [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalFree(IntPtr hMem);
+
+    public const uint SMTO_ABORTIFHUNG = 0x0002;
+    public const uint WM_DROPFILES = 0x0233;
+    public const uint WM_CLOSE = 0x0010;
+    public const uint WM_KEYDOWN = 0x0100;
+    public const uint WM_KEYUP = 0x0101;
+    public const int VK_ESCAPE = 0x1B;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT {
@@ -340,6 +410,34 @@ public class CrossDesktopFocus {
         public bool fNC;
         [MarshalAs(UnmanagedType.Bool)]
         public bool fWide;
+    }
+
+    public static void DismissModalDialogs(uint threadId) {
+        if (threadId == 0) return;
+        EnumThreadWindows(threadId, (hWnd, lParam) => {
+            var sbClass = new StringBuilder(256);
+            GetClassName(hWnd, sbClass, 256);
+            var sbText = new StringBuilder(256);
+            GetWindowText(hWnd, sbText, 256);
+            string cls = sbClass.ToString();
+            string txt = sbText.ToString();
+
+            bool isDialog = cls.IndexOf("Dialog", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            cls.IndexOf("Popup", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            cls == "#32770" ||
+                            cls.IndexOf("QWindowPopupSaveBits", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            txt.IndexOf("Save", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            txt.IndexOf("Unsaved", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            txt.IndexOf("Changes", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            if (isDialog) {
+                // Synthesize escape key and WM_CLOSE to safely dismiss prompt without blocking
+                PostMessage(hWnd, WM_KEYDOWN, (IntPtr)VK_ESCAPE, IntPtr.Zero);
+                PostMessage(hWnd, WM_KEYUP, (IntPtr)VK_ESCAPE, IntPtr.Zero);
+                PostMessage(hWnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+            }
+            return true;
+        }, IntPtr.Zero);
     }
 
     public static string ActivateAndDrop(string queryTitle, string filePath) {
@@ -408,7 +506,13 @@ public class CrossDesktopFocus {
                 }
                 Thread.Sleep(250);
 
-                // Post WM_DROPFILES to the active Mine-imator window
+                uint targetProcessId;
+                uint targetThreadId = GetWindowThreadProcessId(targetHwnd, out targetProcessId);
+
+                // Dismiss any lingering modal prompts before drop
+                DismissModalDialogs(targetThreadId);
+
+                // Send WM_DROPFILES to the active Mine-imator window with timeout protection
                 if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath)) {
                     try {
                         byte[] pathBytes = Encoding.Unicode.GetBytes(filePath + "\\0\\0");
@@ -429,8 +533,29 @@ public class CrossDesktopFocus {
                                 Marshal.Copy(pathBytes, 0, new IntPtr(pMem.ToInt64() + structSize), pathBytes.Length);
                                 GlobalUnlock(hGlobal);
 
-                                const uint WM_DROPFILES = 0x0233;
-                                PostMessage(targetHwnd, WM_DROPFILES, hGlobal, IntPtr.Zero);
+                                // Background watcher thread to dismiss any confirmation dialog spawned by the drop
+                                Thread watcher = new Thread(() => {
+                                    Thread.Sleep(150);
+                                    DismissModalDialogs(targetThreadId);
+                                });
+                                watcher.IsBackground = true;
+                                watcher.Start();
+
+                                IntPtr result;
+                                IntPtr sendRet = SendMessageTimeout(
+                                    targetHwnd,
+                                    WM_DROPFILES,
+                                    hGlobal,
+                                    IntPtr.Zero,
+                                    SMTO_ABORTIFHUNG,
+                                    3000,
+                                    out result
+                                );
+
+                                if (sendRet == IntPtr.Zero) {
+                                    // Timed out or hung: post message asynchronously as fallback
+                                    PostMessage(targetHwnd, WM_DROPFILES, hGlobal, IntPtr.Zero);
+                                }
                             }
                         }
                     } catch {}

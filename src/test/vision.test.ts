@@ -169,4 +169,79 @@ describe("3D Spatial Awareness & Camera Frustum Vision", () => {
     assert.ok(rootSummary);
     assert.equal(rootSummary.childrenCount >= 1, true);
   });
+
+  it("should account for camera roll (ROT_Y) Dutch angle in projection transform", () => {
+    // Camera at [0, 0, 0] looking along +Y, with 90-degree Roll (ROT_Y = 90)
+    // Point on the right [+10, 50, 0]
+    const projRolled = projectToScreenSpace(
+      [0, 0, 0],
+      [0, 90, 0], // Roll = 90 deg
+      [10, 50, 0],
+      45,
+      16 / 9,
+      1280,
+      720
+    );
+
+    assert.equal(projRolled.inFrame, true);
+    assert.equal(projRolled.behindCamera, false);
+    // Under 90 deg roll, the +X lateral offset rotates into the vertical NDC axis
+    assert.ok(Math.abs(projRolled.ndc[0]) < 1e-4, `Expected ndcX ~0, got ${projRolled.ndc[0]}`);
+    assert.ok(projRolled.ndc[1] > 0, `Expected ndcY > 0, got ${projRolled.ndc[1]}`);
+  });
+
+  it("should project 8-corner OBB with near-plane clipping without NaN or negative depth errors", () => {
+    const { project } = createNewProject({ project_path: "temp_obb_vis.miproject" });
+    // Entity positioned very close to camera at Y = 1.5, partially behind near plane (near clip = 1.0)
+    const char = buildCharacterHierarchy({ name: "Close Steve", position: [0, 1.5, 0] });
+    project.timelines.push(char.rootTimeline);
+
+    const cameraTl = {
+      id: "cam_close",
+      type: "camera",
+      name: "Close Cam",
+      temp: "null",
+      default_values: { POS_X: 0, POS_Y: 0, POS_Z: 16, ROT_X: 0, ROT_Y: 0, ROT_Z: 0, CAM_FOV: 45 },
+      keyframes: {},
+      parent: "root",
+      parent_tree_index: 0,
+      inherit: {} as any,
+    };
+
+    const rep = checkEntityVisibility(cameraTl, char.rootTimeline);
+    assert.equal(rep.inFrame, true);
+    assert.ok(rep.obb);
+    assert.ok(rep.obb.visibleCornersCount > 0);
+    assert.ok(!isNaN(rep.obb.ndcMin[0]));
+    assert.ok(!isNaN(rep.obb.ndcMax[0]));
+    assert.ok(rep.obb.pixelBounds.width >= 0);
+    assert.ok(rep.obb.pixelBounds.height >= 0);
+  });
+
+  it("should compute Head/Face keypoint projection and rule-of-thirds composition placement", () => {
+    const { project } = createNewProject({ project_path: "temp_head_vis.miproject" });
+    // Character standing at [0, 40, 0]
+    const char = buildCharacterHierarchy({ name: "Actor Steve", position: [0, 40, 0] });
+    project.timelines.push(char.rootTimeline);
+
+    const cameraTl = {
+      id: "cam_rule3",
+      type: "camera",
+      name: "Framing Cam",
+      temp: "null",
+      default_values: { POS_X: 0, POS_Y: 0, POS_Z: 28, ROT_X: 0, ROT_Y: 0, ROT_Z: 0, CAM_FOV: 45 },
+      keyframes: {},
+      parent: "root",
+      parent_tree_index: 0,
+      inherit: {} as any,
+    };
+
+    const rep = checkEntityVisibility(cameraTl, char.rootTimeline);
+    assert.equal(rep.inFrame, true);
+    assert.ok(rep.headKeypoint, "headKeypoint must be present for character");
+    assert.equal(rep.headKeypoint.inFrame, true);
+    assert.equal(rep.headKeypoint.behindCamera, false);
+    assert.ok(rep.headKeypoint.depth > 0);
+    assert.ok(typeof rep.headKeypoint.framingZone === "string");
+  });
 });

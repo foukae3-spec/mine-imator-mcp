@@ -832,6 +832,11 @@ const TOOLS = [
           type: "string",
           description: "Window title substring to locate (default: 'Mine-imator').",
         },
+        show_rule_of_thirds: {
+          type: "boolean",
+          description:
+            "Whether to overlay a Rule-of-Thirds HUD grid with power point markers on the captured viewport image.",
+        },
       },
       required: ["output_image_path"],
     },

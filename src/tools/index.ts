@@ -853,9 +853,12 @@ export const toolHandlers = {
     output_image_path?: string;
     output_path?: string;
     window_title?: string;
+    show_rule_of_thirds?: boolean;
+    overlay_grid?: boolean;
   }) => {
     const targetOut = args.output_image_path || args.output_path || "viewport_preview.png";
-    return captureMineimatorViewport(targetOut, args.window_title);
+    const overlay = args.show_rule_of_thirds ?? args.overlay_grid ?? false;
+    return captureMineimatorViewport(targetOut, args.window_title, overlay);
   },
 
   // 21. Live Reload Project

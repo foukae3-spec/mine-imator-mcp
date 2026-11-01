@@ -16,6 +16,15 @@ export interface ScreenProjectionResult {
   distance: number; // Euclidean 3D distance
 }
 
+export interface OBBProjectionResult {
+  inFrame: boolean;
+  behindCamera: boolean;
+  ndcMin: [number, number];
+  ndcMax: [number, number];
+  pixelBounds: { x: number; y: number; width: number; height: number };
+  visibleCornersCount: number;
+}
+
 export interface EntityVisibilityReport {
   entityId: string;
   entityName: string;
@@ -35,6 +44,15 @@ export interface EntityVisibilityReport {
     | "edge_cropped"
     | "off_screen"
     | "behind_camera";
+  obb?: OBBProjectionResult;
+  headKeypoint?: {
+    inFrame: boolean;
+    behindCamera: boolean;
+    screenCoords: [number, number];
+    ndc: [number, number];
+    depth: number;
+    framingZone: EntityVisibilityReport["framingZone"];
+  };
 }
 
 export interface InterEntityDistance {
@@ -73,8 +91,55 @@ function cleanZero(val: number): number {
 }
 
 /**
+ * Transforms world coordinates to camera space using the full camera view matrix:
+ * P_c = R_y(-Roll) * R_x(-Pitch) * R_z(-Yaw) * (P_w - C)
+ */
+export function transformWorldToCamera(
+  cameraPos: [number, number, number],
+  cameraRot: [number, number, number],
+  worldPos: [number, number, number]
+): [number, number, number] {
+  const [cx, cy, cz] = cameraPos;
+  const [rotX, rotY, rotZ] = cameraRot;
+  const [wx, wy, wz] = worldPos;
+
+  // Angles in radians
+  const pitch = (rotX * Math.PI) / 180;
+  const roll = (rotY * Math.PI) / 180;
+  const yaw = (rotZ * Math.PI) / 180;
+
+  // 1. Vector from camera: (P_w - C)
+  const vx = wx - cx;
+  const vy = wy - cy;
+  const vz = wz - cz;
+
+  // 2. R_z(-Yaw)
+  const cosY = Math.cos(yaw);
+  const sinY = Math.sin(yaw);
+  const v1x = vx * cosY + vy * sinY;
+  const v1y = -vx * sinY + vy * cosY;
+  const v1z = vz;
+
+  // 3. R_x(-Pitch)
+  const cosP = Math.cos(pitch);
+  const sinP = Math.sin(pitch);
+  const v2x = v1x;
+  const v2y = v1y * cosP + v1z * sinP;
+  const v2z = -v1y * sinP + v1z * cosP;
+
+  // 4. R_y(-Roll)
+  const cosR = Math.cos(roll);
+  const sinR = Math.sin(roll);
+  const Pcx = v2x * cosR - v2z * sinR;
+  const Pcy = v2y;
+  const Pcz = v2x * sinR + v2z * cosR;
+
+  return [cleanZero(Pcx), cleanZero(Pcy), cleanZero(Pcz)];
+}
+
+/**
  * Projects a 3D world coordinate onto the camera's 2D normalized device coordinates (NDC)
- * and pixel screen coordinates.
+ * and pixel screen coordinates using P_c = R_y(-Roll) * R_x(-Pitch) * R_z(-Yaw) * (P_w - C).
  */
 export function projectToScreenSpace(
   cameraPos: [number, number, number],
@@ -86,61 +151,13 @@ export function projectToScreenSpace(
   viewportHeight: number = 720
 ): ScreenProjectionResult {
   const [cx, cy, cz] = cameraPos;
-  const [rotX, rotY, rotZ] = cameraRot;
   const [tx, ty, tz] = targetPos;
-
-  // Convert angles to radians
-  const pitch = (rotX * Math.PI) / 180; // positive tilts down
-  const roll = (rotY * Math.PI) / 180;
-  const yaw = (rotZ * Math.PI) / 180; // 0 is North (+Y), 90 is East (+X)
-
-  // Camera Forward vector (F)
-  const Fx = Math.sin(yaw) * Math.cos(pitch);
-  const Fy = Math.cos(yaw) * Math.cos(pitch);
-  const Fz = -Math.sin(pitch);
-
-  // Camera Right vector (R) before roll
-  let Rx = Math.cos(yaw);
-  let Ry = -Math.sin(yaw);
-  let Rz = 0;
-
-  // Camera Up vector (U) = R x F
-  let Ux = Ry * Fz - Rz * Fy;
-  let Uy = Rz * Fx - Rx * Fz;
-  let Uz = Rx * Fy - Ry * Fx;
-
-  // Apply camera roll around Forward axis if any
-  if (Math.abs(roll) > 1e-6) {
-    const cosR = Math.cos(roll);
-    const sinR = Math.sin(roll);
-    const newRx = Rx * cosR + Ux * sinR;
-    const newRy = Ry * cosR + Uy * sinR;
-    const newRz = Rz * cosR + Uz * sinR;
-
-    const newUx = -Rx * sinR + Ux * cosR;
-    const newUy = -Ry * sinR + Uy * cosR;
-    const newUz = -Rz * sinR + Uz * cosR;
-
-    Rx = newRx;
-    Ry = newRy;
-    Rz = newRz;
-    Ux = newUx;
-    Uy = newUy;
-    Uz = newUz;
-  }
-
-  // Vector from camera to target
   const vx = tx - cx;
   const vy = ty - cy;
   const vz = tz - cz;
-
   const distance = Math.sqrt(vx * vx + vy * vy + vz * vz);
 
-  // Project vector onto camera axes
-  const Xc = vx * Rx + vy * Ry + vz * Rz; // lateral offset (+ right)
-  const Yc = vx * Fx + vy * Fy + vz * Fz; // depth along lens (+ forward)
-  const Zc = vx * Ux + vy * Uy + vz * Uz; // vertical offset (+ up)
-
+  const [Xc, Yc, Zc] = transformWorldToCamera(cameraPos, cameraRot, targetPos);
   const behindCamera = Yc <= 0.001;
 
   // Perspective projection
@@ -165,8 +182,201 @@ export function projectToScreenSpace(
   };
 }
 
+export function getEntityLocalBoundingBox(
+  entityType: string
+): { min: [number, number, number]; max: [number, number, number] } {
+  switch (entityType) {
+    case "char":
+      // Standard Minecraft biped: 8 wide (-4 to 4), 4 deep (-2 to 2), 32 tall (0 to 32)
+      return {
+        min: [-4, -2, 0],
+        max: [4, 2, 32],
+      };
+    case "block":
+      // Standard block in Mine-imator: 16x16x16
+      return {
+        min: [-8, -8, 0],
+        max: [8, 8, 16],
+      };
+    case "item":
+      return {
+        min: [-4, -4, -4],
+        max: [4, 4, 4],
+      };
+    default:
+      return {
+        min: [-8, -8, 0],
+        max: [8, 8, 16],
+      };
+  }
+}
+
+export function computeEntityOBBWorldCorners(
+  pos: [number, number, number],
+  rot: [number, number, number],
+  bounds: { min: [number, number, number]; max: [number, number, number] }
+): [number, number, number][] {
+  const [minX, minY, minZ] = bounds.min;
+  const [maxX, maxY, maxZ] = bounds.max;
+
+  const localCorners: [number, number, number][] = [
+    [minX, minY, minZ], // 0: bottom-left-back
+    [maxX, minY, minZ], // 1: bottom-right-back
+    [maxX, maxY, minZ], // 2: bottom-right-front
+    [minX, maxY, minZ], // 3: bottom-left-front
+    [minX, minY, maxZ], // 4: top-left-back
+    [maxX, minY, maxZ], // 5: top-right-back
+    [maxX, maxY, maxZ], // 6: top-right-front
+    [minX, maxY, maxZ], // 7: top-left-front
+  ];
+
+  const pitchRad = (rot[0] * Math.PI) / 180;
+  const rollRad = (rot[1] * Math.PI) / 180;
+  const yawRad = (rot[2] * Math.PI) / 180;
+
+  const Fx = Math.sin(yawRad) * Math.cos(pitchRad);
+  const Fy = Math.cos(yawRad) * Math.cos(pitchRad);
+  const Fz = -Math.sin(pitchRad);
+
+  let Rx = Math.cos(yawRad);
+  let Ry = -Math.sin(yawRad);
+  let Rz = 0;
+
+  let Ux = Ry * Fz - Rz * Fy;
+  let Uy = Rz * Fx - Rx * Fz;
+  let Uz = Rx * Fy - Ry * Fx;
+
+  if (Math.abs(rollRad) > 1e-6) {
+    const cosR = Math.cos(rollRad);
+    const sinR = Math.sin(rollRad);
+    const nRx = Rx * cosR + Ux * sinR;
+    const nRy = Ry * cosR + Uy * sinR;
+    const nRz = Rz * cosR + Uz * sinR;
+    const nUx = -Rx * sinR + Ux * cosR;
+    const nUy = -Ry * sinR + Uy * cosR;
+    const nUz = -Rz * sinR + Uz * cosR;
+    Rx = nRx; Ry = nRy; Rz = nRz;
+    Ux = nUx; Uy = nUy; Uz = nUz;
+  }
+
+  return localCorners.map(([lx, ly, lz]) => [
+    pos[0] + lx * Rx + ly * Fx + lz * Ux,
+    pos[1] + lx * Ry + ly * Fy + lz * Uy,
+    pos[2] + lx * Rz + ly * Fz + lz * Uz,
+  ]);
+}
+
 /**
- * Checks visibility and framing zone of an entity relative to a camera.
+ * Evaluates entity 8-corner Oriented Bounding Box (OBB) against camera view frustum
+ * with near-plane clipping (P_c,y >= 1.0).
+ */
+export function projectOBBToScreenSpace(
+  cameraPos: [number, number, number],
+  cameraRot: [number, number, number],
+  obbWorldCorners: [number, number, number][],
+  fovDeg: number = 45,
+  aspectRatio: number = 16 / 9,
+  viewportWidth: number = 1280,
+  viewportHeight: number = 720,
+  nearClip: number = 1.0
+): OBBProjectionResult {
+  const cameraCorners = obbWorldCorners.map((cw) =>
+    transformWorldToCamera(cameraPos, cameraRot, cw)
+  );
+
+  const edges: [number, number][] = [
+    [0, 1], [1, 2], [2, 3], [3, 0], // bottom face
+    [4, 5], [5, 6], [6, 7], [7, 4], // top face
+    [0, 4], [1, 5], [2, 6], [3, 7], // vertical edges
+  ];
+
+  const survivingPoints: [number, number, number][] = [];
+  let visibleCornersCount = 0;
+
+  for (const pt of cameraCorners) {
+    if (pt[1] >= nearClip) {
+      survivingPoints.push(pt);
+      visibleCornersCount++;
+    }
+  }
+
+  // Clip edges crossing the near-clip plane (P_c,y = nearClip)
+  for (const [i, j] of edges) {
+    const p1 = cameraCorners[i];
+    const p2 = cameraCorners[j];
+    const y1 = p1[1];
+    const y2 = p2[1];
+
+    if ((y1 >= nearClip && y2 < nearClip) || (y1 < nearClip && y2 >= nearClip)) {
+      const t = (nearClip - y1) / (y2 - y1);
+      const clipped: [number, number, number] = [
+        p1[0] + t * (p2[0] - p1[0]),
+        nearClip,
+        p1[2] + t * (p2[2] - p1[2]),
+      ];
+      survivingPoints.push(clipped);
+    }
+  }
+
+  if (survivingPoints.length === 0) {
+    return {
+      inFrame: false,
+      behindCamera: true,
+      ndcMin: [-1, -1],
+      ndcMax: [-1, -1],
+      pixelBounds: { x: 0, y: 0, width: 0, height: 0 },
+      visibleCornersCount: 0,
+    };
+  }
+
+  const tanHalfFov = Math.tan((fovDeg * Math.PI) / 360);
+  let minNdcX = Infinity;
+  let maxNdcX = -Infinity;
+  let minNdcY = Infinity;
+  let maxNdcY = -Infinity;
+
+  for (const [xc, yc, zc] of survivingPoints) {
+    const depth = Math.max(0.001, yc);
+    const ndcX = xc / (depth * tanHalfFov * aspectRatio);
+    const ndcY = zc / (depth * tanHalfFov);
+    if (ndcX < minNdcX) minNdcX = ndcX;
+    if (ndcX > maxNdcX) maxNdcX = ndcX;
+    if (ndcY < minNdcY) minNdcY = ndcY;
+    if (ndcY > maxNdcY) maxNdcY = ndcY;
+  }
+
+  minNdcX = cleanZero(minNdcX);
+  maxNdcX = cleanZero(maxNdcX);
+  minNdcY = cleanZero(minNdcY);
+  maxNdcY = cleanZero(maxNdcY);
+
+  const pxMin = Math.round(((minNdcX + 1) / 2) * viewportWidth);
+  const pxMax = Math.round(((maxNdcX + 1) / 2) * viewportWidth);
+  const pyMin = Math.round(((1 - maxNdcY) / 2) * viewportHeight);
+  const pyMax = Math.round(((1 - minNdcY) / 2) * viewportHeight);
+
+  // In frame if any portion overlaps NDC view boundary [-1.05, 1.05]^2
+  const inFrame =
+    minNdcX <= 1.05 && maxNdcX >= -1.05 &&
+    minNdcY <= 1.05 && maxNdcY >= -1.05;
+
+  return {
+    inFrame,
+    behindCamera: false,
+    ndcMin: [minNdcX, minNdcY],
+    ndcMax: [maxNdcX, maxNdcY],
+    pixelBounds: {
+      x: pxMin,
+      y: pyMin,
+      width: Math.max(0, pxMax - pxMin),
+      height: Math.max(0, pyMax - pyMin),
+    },
+    visibleCornersCount,
+  };
+}
+
+/**
+ * Checks visibility, 8-corner OBB bounds, and Head/Face Keypoint Framing of an entity relative to a camera.
  */
 export function checkEntityVisibility(
   cameraTimeline: TimelineNode,
@@ -180,6 +390,8 @@ export function checkEntityVisibility(
 ): EntityVisibilityReport {
   const frame = options.frame ?? 0;
   const frameStr = Math.round(frame).toString();
+  const viewportWidth = options.viewportWidth ?? 1280;
+  const viewportHeight = options.viewportHeight ?? 720;
 
   // Resolve camera position and rotation at frame
   let camPos: [number, number, number] = [
@@ -205,39 +417,113 @@ export function checkEntityVisibility(
     if (kf.CAM_FOV !== undefined) fov = kf.CAM_FOV;
   }
 
-  // Resolve entity position at frame
-  let entPos: [number, number, number] = [
+  // Resolve entity raw position and rotation at frame
+  let entPosRaw: [number, number, number] = [
     (entityTimeline.default_values?.POS_X as number) || 0,
     (entityTimeline.default_values?.POS_Y as number) || 0,
     (entityTimeline.default_values?.POS_Z as number) || 0,
   ];
+  let entRot: [number, number, number] = [
+    (entityTimeline.default_values?.ROT_X as number) || 0,
+    (entityTimeline.default_values?.ROT_Y as number) || 0,
+    (entityTimeline.default_values?.ROT_Z as number) || 0,
+  ];
 
   if (entityTimeline.keyframes && entityTimeline.keyframes[frameStr]) {
     const kf = entityTimeline.keyframes[frameStr];
-    if (kf.POS_X !== undefined) entPos[0] = kf.POS_X;
-    if (kf.POS_Y !== undefined) entPos[1] = kf.POS_Y;
-    if (kf.POS_Z !== undefined) entPos[2] = kf.POS_Z;
+    if (kf.POS_X !== undefined) entPosRaw[0] = kf.POS_X;
+    if (kf.POS_Y !== undefined) entPosRaw[1] = kf.POS_Y;
+    if (kf.POS_Z !== undefined) entPosRaw[2] = kf.POS_Z;
+    if (kf.ROT_X !== undefined) entRot[0] = kf.ROT_X;
+    if (kf.ROT_Y !== undefined) entRot[1] = kf.ROT_Y;
+    if (kf.ROT_Z !== undefined) entRot[2] = kf.ROT_Z;
   }
 
-  // If character, add torso/head elevation offset (e.g. 16 units)
+  // Center reference position for classic point projection
+  const centerPos: [number, number, number] = [entPosRaw[0], entPosRaw[1], entPosRaw[2]];
   if (entityTimeline.type === "char") {
-    entPos[2] += 16;
+    centerPos[2] += 16;
   }
 
   const proj = projectToScreenSpace(
     camPos,
     camRot,
-    entPos,
+    centerPos,
     fov,
     16 / 9,
-    options.viewportWidth ?? 1280,
-    options.viewportHeight ?? 720
+    viewportWidth,
+    viewportHeight
   );
 
+  // 8-Corner OBB Frustum Projection with near-plane clipping
+  const bounds = getEntityLocalBoundingBox(entityTimeline.type);
+  const obbCorners = computeEntityOBBWorldCorners(entPosRaw, entRot, bounds);
+  const obbResult = projectOBBToScreenSpace(
+    camPos,
+    camRot,
+    obbCorners,
+    fov,
+    16 / 9,
+    viewportWidth,
+    viewportHeight,
+    1.0
+  );
+
+  // Separate Head/Face Keypoint Projection for rule-of-thirds composition
+  let headKeypoint: EntityVisibilityReport["headKeypoint"] | undefined;
+  if (entityTimeline.type === "char") {
+    const headOffset: [number, number, number] = [0, 0, 28];
+    const headCorners = computeEntityOBBWorldCorners(entPosRaw, entRot, {
+      min: headOffset,
+      max: headOffset,
+    });
+    const headProj = projectToScreenSpace(
+      camPos,
+      camRot,
+      headCorners[0],
+      fov,
+      16 / 9,
+      viewportWidth,
+      viewportHeight
+    );
+
+    let headZone: EntityVisibilityReport["framingZone"] = "off_screen";
+    if (headProj.behindCamera) {
+      headZone = "behind_camera";
+    } else if (!headProj.inFrame) {
+      headZone = "off_screen";
+    } else if (Math.abs(headProj.ndc[0]) > 0.95 || Math.abs(headProj.ndc[1]) > 0.95) {
+      headZone = "edge_cropped";
+    } else if (Math.abs(headProj.ndc[0]) < 0.25 && Math.abs(headProj.ndc[1]) < 0.25) {
+      headZone = "center";
+    } else if (headProj.ndc[0] < -0.2) {
+      headZone = "rule_of_thirds_left";
+    } else if (headProj.ndc[0] > 0.2) {
+      headZone = "rule_of_thirds_right";
+    } else if (headProj.ndc[1] > 0.2) {
+      headZone = "upper_third";
+    } else {
+      headZone = "lower_third";
+    }
+
+    headKeypoint = {
+      inFrame: headProj.inFrame,
+      behindCamera: headProj.behindCamera,
+      screenCoords: headProj.pixel,
+      ndc: headProj.ndc,
+      depth: headProj.depth,
+      framingZone: headZone,
+    };
+  }
+
+  // Overall inFrame combines OBB and center projection
+  const inFrame = obbResult.inFrame || proj.inFrame;
+  const behindCamera = obbResult.behindCamera && proj.behindCamera;
+
   let zone: EntityVisibilityReport["framingZone"] = "off_screen";
-  if (proj.behindCamera) {
+  if (behindCamera) {
     zone = "behind_camera";
-  } else if (!proj.inFrame) {
+  } else if (!inFrame) {
     zone = "off_screen";
   } else if (Math.abs(proj.ndc[0]) > 0.95 || Math.abs(proj.ndc[1]) > 0.95) {
     zone = "edge_cropped";
@@ -257,13 +543,15 @@ export function checkEntityVisibility(
     entityId: entityTimeline.id,
     entityName: entityTimeline.name || entityTimeline.id,
     entityType: entityTimeline.type,
-    inFrame: proj.inFrame,
-    behindCamera: proj.behindCamera,
+    inFrame,
+    behindCamera,
     screenCoords: proj.pixel,
     ndc: proj.ndc,
     depth: proj.depth,
     distance: proj.distance,
     framingZone: zone,
+    obb: obbResult,
+    headKeypoint,
   };
 }
 
