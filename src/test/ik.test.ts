@@ -265,4 +265,86 @@ describe("Analytical Inverse Kinematics (IK) Engine", () => {
     assert.ok(sol2.bend >= 0, `Bend must be >= 0, got ${sol2.bend}`);
     assert.ok(sol2.bend <= 140, `Bend must be <= 140, got ${sol2.bend}`);
   });
+
+  it("should preserve exact physical bone lengths (L1 and L2) across arbitrary 3D reach and pole vectors", () => {
+    const testCases: { target: [number, number, number]; pole?: [number, number, number] }[] = [
+      { target: [4, 4, 0], pole: [0, 0, 1] },
+      { target: [-3, 5, -2], pole: [-1, -1, 0] },
+      { target: [2, 6, 1], pole: [0, 1, 0] },
+      { target: [0, 3, -4] },
+    ];
+
+    for (const tc of testCases) {
+      const sol = solveLimbIK({
+        shoulderPos: [10, 20, 30],
+        targetPos: [10 + tc.target[0], 20 + tc.target[1], 30 + tc.target[2]],
+        poleVector: tc.pole,
+        limbType: "right_arm",
+      });
+
+      const dUpper = Math.hypot(
+        sol.elbowPos[0] - sol.shoulderPos[0],
+        sol.elbowPos[1] - sol.shoulderPos[1],
+        sol.elbowPos[2] - sol.shoulderPos[2]
+      );
+      const dLower = Math.hypot(
+        sol.wristPos[0] - sol.elbowPos[0],
+        sol.wristPos[1] - sol.elbowPos[1],
+        sol.wristPos[2] - sol.elbowPos[2]
+      );
+
+      assert.ok(
+        Math.abs(dUpper - 4) < 1e-4,
+        `Expected upper arm length 4, got ${dUpper} for target ${tc.target}`
+      );
+      assert.ok(
+        Math.abs(dLower - 6) < 1e-4,
+        `Expected lower arm length 6, got ${dLower} for target ${tc.target}`
+      );
+    }
+  });
+
+  it("should preserve bone lengths in world space under full parent FK chain with torso bend and pole vector", () => {
+    const testPath = "C:/Users/RocKeR/.gemini/antigravity/scratch/mine-imator-mcp/test_ik_fk_lengths.miproject";
+    const { project } = createNewProject({ project_path: testPath });
+    const char = buildCharacterHierarchy({
+      name: "FK Steve",
+      position: [10, -5, 4],
+      rotation: [0, 0, 45],
+    });
+    project.templates.push(char.template);
+    project.timelines.push(char.rootTimeline, ...char.parts);
+
+    const bodyTl = char.parts.find((p) => p.model_part_name === "body")!;
+    bodyTl.default_values = {
+      ...bodyTl.default_values,
+      BEND_ANGLE_X: 25,
+      ROT_Z: 15,
+    };
+
+    const res = applyIKToCharacter(
+      project.timelines,
+      char.rootTimeline.id,
+      "right_arm",
+      [15, 5, 20],
+      { frame: 0, poleVector: [0, -1, 0] }
+    );
+
+    assert.equal(res.success, true);
+    const dUpper = Math.hypot(
+      res.solution.elbowPos[0] - res.solution.shoulderPos[0],
+      res.solution.elbowPos[1] - res.solution.shoulderPos[1],
+      res.solution.elbowPos[2] - res.solution.shoulderPos[2]
+    );
+    const dLower = Math.hypot(
+      res.solution.wristPos[0] - res.solution.elbowPos[0],
+      res.solution.wristPos[1] - res.solution.elbowPos[1],
+      res.solution.wristPos[2] - res.solution.elbowPos[2]
+    );
+
+    assert.ok(Math.abs(dUpper - 4) < 1e-3, `Expected world L1 ~4, got ${dUpper}`);
+    assert.ok(Math.abs(dLower - 6) < 1e-3, `Expected world L2 ~6, got ${dLower}`);
+
+    if (fs.existsSync(testPath)) fs.unlinkSync(testPath);
+  });
 });

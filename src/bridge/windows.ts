@@ -101,8 +101,8 @@ public class CrossDesktopCapture {
     public static extern IntPtr OpenDesktop(string lpszDesktop, int dwFlags, bool fInherit, uint dwDesiredAccess);
     [DllImport("user32.dll")] public static extern bool SetThreadDesktop(IntPtr hDesktop);
     [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr hDesktop);
-    public delegate bool CallBackPtr(IntPtr hwnd, int lParam);
-    [DllImport("user32.dll")] public static extern int EnumDesktopWindows(IntPtr hDesktop, CallBackPtr callPtr, int lPar);
+    public delegate bool CallBackPtr(IntPtr hwnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern int EnumDesktopWindows(IntPtr hDesktop, CallBackPtr callPtr, IntPtr lPar);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
@@ -167,7 +167,7 @@ public class CrossDesktopCapture {
                     }
                 }
                 return true;
-            }, 0);
+            }, IntPtr.Zero);
 
             if (foundHwnd == IntPtr.Zero) {
                 CloseDesktop(hDesk);
@@ -213,7 +213,7 @@ public class CrossDesktopCapture {
                 return;
             }
 
-            using (Bitmap bmp = new Bitmap(w, h)) {
+            using (Bitmap bmp = new Bitmap(w, h, PixelFormat.Format24bppRgb)) {
                 using (Graphics g = Graphics.FromImage(bmp)) {
                     IntPtr hdc = g.GetHdc();
                     bool pwSuccess = false;
@@ -357,8 +357,8 @@ public class CrossDesktopFocus {
     public static extern IntPtr OpenDesktop(string lpszDesktop, int dwFlags, bool fInherit, uint dwDesiredAccess);
     [DllImport("user32.dll")] public static extern bool SetThreadDesktop(IntPtr hDesktop);
     [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr hDesktop);
-    public delegate bool CallBackPtr(IntPtr hwnd, int lParam);
-    [DllImport("user32.dll")] public static extern int EnumDesktopWindows(IntPtr hDesktop, CallBackPtr callPtr, int lPar);
+    public delegate bool CallBackPtr(IntPtr hwnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern int EnumDesktopWindows(IntPtr hDesktop, CallBackPtr callPtr, IntPtr lPar);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -412,9 +412,11 @@ public class CrossDesktopFocus {
         public bool fWide;
     }
 
-    public static void DismissModalDialogs(uint threadId) {
+    public static void DismissModalDialogs(uint threadId, IntPtr mainHwnd) {
         if (threadId == 0) return;
         EnumThreadWindows(threadId, (hWnd, lParam) => {
+            if (hWnd == mainHwnd) return true;
+
             var sbClass = new StringBuilder(256);
             GetClassName(hWnd, sbClass, 256);
             var sbText = new StringBuilder(256);
@@ -426,9 +428,10 @@ public class CrossDesktopFocus {
                             cls.IndexOf("Popup", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             cls == "#32770" ||
                             cls.IndexOf("QWindowPopupSaveBits", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            txt.IndexOf("Save", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            txt.IndexOf("Unsaved", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            txt.IndexOf("Changes", StringComparison.OrdinalIgnoreCase) >= 0;
+                            ((cls.IndexOf("Qt", StringComparison.OrdinalIgnoreCase) >= 0 || cls == "#32770") &&
+                             (txt.IndexOf("Save", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                              txt.IndexOf("Unsaved", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                              txt.IndexOf("Changes", StringComparison.OrdinalIgnoreCase) >= 0));
 
             if (isDialog) {
                 // Synthesize escape key and WM_CLOSE to safely dismiss prompt without blocking
@@ -475,7 +478,7 @@ public class CrossDesktopFocus {
                     return false;
                 }
                 return true;
-            }, 0);
+            }, IntPtr.Zero);
 
             if (targetHwnd != IntPtr.Zero) {
                 if (IsIconic(targetHwnd)) {
@@ -510,12 +513,15 @@ public class CrossDesktopFocus {
                 uint targetThreadId = GetWindowThreadProcessId(targetHwnd, out targetProcessId);
 
                 // Dismiss any lingering modal prompts before drop
-                DismissModalDialogs(targetThreadId);
+                DismissModalDialogs(targetThreadId, targetHwnd);
 
                 // Send WM_DROPFILES to the active Mine-imator window with timeout protection
                 if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath)) {
                     try {
-                        byte[] pathBytes = Encoding.Unicode.GetBytes(filePath + "\\0\\0");
+                        byte[] pathRaw = Encoding.Unicode.GetBytes(filePath);
+                        byte[] pathBytes = new byte[pathRaw.Length + 4]; // double null-terminated (4 zero bytes in UTF-16)
+                        Buffer.BlockCopy(pathRaw, 0, pathBytes, 0, pathRaw.Length);
+
                         int structSize = Marshal.SizeOf(typeof(DROPFILES));
                         int totalBytes = structSize + pathBytes.Length;
 
@@ -536,7 +542,7 @@ public class CrossDesktopFocus {
                                 // Background watcher thread to dismiss any confirmation dialog spawned by the drop
                                 Thread watcher = new Thread(() => {
                                     Thread.Sleep(150);
-                                    DismissModalDialogs(targetThreadId);
+                                    DismissModalDialogs(targetThreadId, targetHwnd);
                                 });
                                 watcher.IsBackground = true;
                                 watcher.Start();

@@ -244,4 +244,33 @@ describe("3D Spatial Awareness & Camera Frustum Vision", () => {
     assert.ok(rep.headKeypoint.depth > 0);
     assert.ok(typeof rep.headKeypoint.framingZone === "string");
   });
+
+  it("should accurately detect camera positioned inside an entity OBB volume and mark inFrame = true", () => {
+    const { project } = createNewProject({ project_path: "temp_inside_vis.miproject" });
+    // Character standing at [0, 0, 0] with biped bounds [-4, -2, 0] to [4, 2, 32]
+    const char = buildCharacterHierarchy({ name: "Enclosing Steve", position: [0, 0, 0] });
+    project.timelines.push(char.rootTimeline);
+
+    // Camera placed inside the character's torso at [0, 0, 16]
+    const cameraTl = {
+      id: "cam_inside",
+      type: "camera",
+      name: "Inside Cam",
+      temp: "null",
+      default_values: { POS_X: 0, POS_Y: 0, POS_Z: 16, ROT_X: 0, ROT_Y: 0, ROT_Z: 0, CAM_FOV: 45 },
+      keyframes: {},
+      parent: "root",
+      parent_tree_index: 0,
+      inherit: {} as any,
+    };
+
+    const rep = checkEntityVisibility(cameraTl, char.rootTimeline);
+    assert.equal(rep.inFrame, true, "Entity enclosing camera must report inFrame = true");
+    assert.equal(rep.behindCamera, false, "Entity enclosing camera must not be behindCamera");
+    assert.ok(rep.obb);
+    assert.equal(rep.obb.inFrame, true);
+    assert.equal(rep.obb.behindCamera, false);
+    assert.equal(rep.obb.pixelBounds.width, 1280);
+    assert.equal(rep.obb.pixelBounds.height, 720);
+  });
 });
